@@ -8,6 +8,7 @@ pandas==2.3.2
 pandas-ta==0.4.71b0
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
+bcrypt==4.0.1
 cryptography==42.0.7
 python-multipart==0.0.9
 apscheduler==3.10.4

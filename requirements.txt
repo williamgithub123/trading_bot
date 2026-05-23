@@ -4,8 +4,8 @@ sqlalchemy[asyncio]==2.0.30
 asyncpg==0.29.0
 alembic==1.13.1
 ccxt==4.3.19
-pandas==2.2.2
-pandas-ta==0.3.14b
+pandas==2.3.2
+pandas-ta==0.4.71b0
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
 cryptography==42.0.7

@@ -12,6 +12,7 @@ from app.core.scheduler import start_scheduler, stop_scheduler
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Initialize core services before the API starts handling requests.
     await init_db()
     await start_scheduler()
     yield

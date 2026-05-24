@@ -30,6 +30,10 @@ async def init_db():
     """Create all tables and configure TimescaleDB when available."""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await conn.execute(text("""
+            ALTER TABLE bot_configs
+            ADD COLUMN IF NOT EXISTS paper_trading BOOLEAN NOT NULL DEFAULT TRUE;
+        """))
 
     try:
         async with engine.begin() as conn:

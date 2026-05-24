@@ -73,21 +73,31 @@ class RiskManager:
 # ── Order Executor ────────────────────────────────────────────────────────────
 
 class OrderExecutor:
-    def __init__(self, binance: BinanceService, db: AsyncSession):
-        self.binance = binance
-        self.db      = db
+    def __init__(
+        self,
+        binance: BinanceService,
+        db: AsyncSession,
+        paper_trading: bool = False,
+    ):
+        self.binance       = binance
+        self.db            = db
+        self.paper_trading = paper_trading
 
     async def execute(self, strategy: Strategy, order: OrderParams) -> Trade:
-        """Places a market order on Binance and persists the trade."""
-        raw = await self.binance.create_market_order(
-            symbol = order.symbol,
-            side   = order.side.value.lower(),
-            amount = order.quantity,
-        )
+        """Places or simulates a market order and persists the trade."""
+        if self.paper_trading:
+            exchange_order_id = f"paper-{uuid.uuid4()}"
+        else:
+            raw = await self.binance.create_market_order(
+                symbol = order.symbol,
+                side   = order.side.value.lower(),
+                amount = order.quantity,
+            )
+            exchange_order_id = str(raw.get("id"))
 
         trade = Trade(
             strategy_id       = strategy.id,
-            exchange_order_id = str(raw.get("id")),
+            exchange_order_id = exchange_order_id,
             symbol            = order.symbol,
             side              = order.side,
             status            = OrderStatus.FILLED,

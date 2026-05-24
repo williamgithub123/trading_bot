@@ -37,6 +37,15 @@ def sma_crossover(df: pd.DataFrame, params: dict) -> StrategyResult:
     df = df.copy()
     df["sma_fast"] = ta.sma(df["close"], length=fast)
     df["sma_slow"] = ta.sma(df["close"], length=slow)
+    df = df.dropna(subset=["sma_fast", "sma_slow"])
+
+    if len(df) < 2:
+        return StrategyResult(
+            Signal.HOLD,
+            0.0,
+            f"Not enough data for SMA{fast}/SMA{slow}",
+            {},
+        )
 
     prev = df.iloc[-2]
     curr = df.iloc[-1]
@@ -45,9 +54,9 @@ def sma_crossover(df: pd.DataFrame, params: dict) -> StrategyResult:
     death_cross  = prev["sma_fast"] >= prev["sma_slow"] and curr["sma_fast"] < curr["sma_slow"]
 
     indicators = {
-        "sma_fast": round(curr["sma_fast"], 4),
-        "sma_slow": round(curr["sma_slow"], 4),
-        "price":    round(curr["close"], 4),
+        "sma_fast": float(round(curr["sma_fast"], 4)),
+        "sma_slow": float(round(curr["sma_slow"], 4)),
+        "price":    float(round(curr["close"], 4)),
     }
 
     if golden_cross:
@@ -70,11 +79,23 @@ def rsi_strategy(df: pd.DataFrame, params: dict) -> StrategyResult:
 
     df = df.copy()
     df["rsi"] = ta.rsi(df["close"], length=period)
+    df = df.dropna(subset=["rsi"])
+
+    if len(df) < 2:
+        return StrategyResult(
+            Signal.HOLD,
+            0.0,
+            f"Not enough data for RSI{period}",
+            {},
+        )
 
     curr_rsi = df["rsi"].iloc[-1]
     prev_rsi = df["rsi"].iloc[-2]
 
-    indicators = {"rsi": round(curr_rsi, 2), "price": round(df["close"].iloc[-1], 4)}
+    indicators = {
+        "rsi": float(round(curr_rsi, 2)),
+        "price": float(round(df["close"].iloc[-1], 4)),
+    }
 
     if prev_rsi < oversold and curr_rsi >= oversold:
         return StrategyResult(Signal.BUY,  0.8, f"RSI recovering from oversold ({curr_rsi:.1f})", indicators)
@@ -99,12 +120,22 @@ def macd_strategy(df: pd.DataFrame, params: dict) -> StrategyResult:
     df = pd.concat([df, macd_df], axis=1)
 
     hist_col = f"MACDh_{fast}_{slow}_{signal}"
+    df = df.dropna(subset=[hist_col])
+
+    if len(df) < 2:
+        return StrategyResult(
+            Signal.HOLD,
+            0.0,
+            f"Not enough data for MACD {fast}/{slow}/{signal}",
+            {},
+        )
+
     prev_hist = df[hist_col].iloc[-2]
     curr_hist = df[hist_col].iloc[-1]
 
     indicators = {
-        "macd_hist": round(curr_hist, 6),
-        "price":     round(df["close"].iloc[-1], 4),
+        "macd_hist": float(round(curr_hist, 6)),
+        "price":     float(round(df["close"].iloc[-1], 4)),
     }
 
     if prev_hist < 0 and curr_hist >= 0:

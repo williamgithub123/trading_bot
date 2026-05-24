@@ -10,7 +10,7 @@ from datetime import datetime
 from app.db.database import get_db
 from app.models.models import BotConfig, BotStatus, Strategy, User
 from app.core.security import get_current_user, encrypt_key
-from app.core.scheduler import schedule_strategy, unschedule_strategy
+from app.core.scheduler import run_strategy_cycle, schedule_strategy, unschedule_strategy
 
 router = APIRouter()
 
@@ -20,6 +20,7 @@ class BotConfigRequest(BaseModel):
     binance_api_key: str
     binance_secret:  str
     testnet:         bool = True
+    paper_trading:   bool = True
 
 
 class BotActionRequest(BaseModel):
@@ -42,12 +43,18 @@ async def configure_bot(
         binance_api_key_enc    = encrypt_key(body.binance_api_key),
         binance_secret_key_enc = encrypt_key(body.binance_secret),
         testnet                = body.testnet,
+        paper_trading          = body.paper_trading,
         status                 = BotStatus.STOPPED,
     )
     db.add(config)
     await db.commit()
     await db.refresh(config)
-    return {"config_id": str(config.id), "status": config.status}
+    return {
+        "config_id": str(config.id),
+        "status": config.status,
+        "testnet": config.testnet,
+        "paper_trading": config.paper_trading,
+    }
 
 
 @router.post("/start")
@@ -106,6 +113,22 @@ async def stop_bot(
     return {"status": "STOPPED"}
 
 
+@router.post("/run-once")
+async def run_once(
+    body:         BotActionRequest,
+    current_user: User             = Depends(get_current_user),
+    db:           AsyncSession     = Depends(get_db),
+):
+    config = await db.get(BotConfig, body.config_id)
+    if not config or str(config.user_id) != str(current_user.id):
+        raise HTTPException(404, "Config not found")
+    if not config.paper_trading:
+        raise HTTPException(400, "Run-once is only available in paper trading mode")
+
+    result = await run_strategy_cycle(str(config.strategy_id), force=True)
+    return result
+
+
 @router.get("/status/{config_id}")
 async def get_status(
     config_id:    str,
@@ -120,4 +143,5 @@ async def get_status(
         "started_at": config.started_at,
         "stopped_at": config.stopped_at,
         "testnet":    config.testnet,
+        "paper_trading": config.paper_trading,
     }

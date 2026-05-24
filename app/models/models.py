@@ -89,6 +89,7 @@ class BotConfig(Base):
     binance_api_key_enc    = Column(Text, nullable=False)
     binance_secret_key_enc = Column(Text, nullable=False)
     testnet                = Column(Boolean, default=True)
+    paper_trading          = Column(Boolean, default=True)
 
     status     = Column(Enum(BotStatus), default=BotStatus.STOPPED)
     started_at = Column(DateTime, nullable=True)

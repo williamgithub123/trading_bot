@@ -30,24 +30,29 @@ TIMEFRAME_CRON = {
 }
 
 
-async def run_strategy_cycle(strategy_id: str):
+async def run_strategy_cycle(strategy_id: str, force: bool = False):
     """Core trading loop — called by APScheduler for each active strategy."""
     async with AsyncSessionLocal() as db:
+        filters = [Strategy.id == strategy_id]
+        if not force:
+            filters.append(Strategy.is_active == True)
+
         result = await db.execute(
             select(Strategy)
             .options(selectinload(Strategy.bot_config))
-            .where(Strategy.id == strategy_id, Strategy.is_active == True)
+            .where(*filters)
         )
         strategy = result.scalar_one_or_none()
         if not strategy or not strategy.bot_config:
-            return
-        if strategy.bot_config.status != BotStatus.RUNNING:
-            return
+            return {"status": "SKIPPED", "reason": "Strategy or bot config not found"}
+        if not force and strategy.bot_config.status != BotStatus.RUNNING:
+            return {"status": "SKIPPED", "reason": "Bot is not running"}
 
         binance = BinanceService(
             api_key_enc = strategy.bot_config.binance_api_key_enc,
             secret_enc  = strategy.bot_config.binance_secret_key_enc,
             testnet     = strategy.bot_config.testnet,
+            use_credentials = not strategy.bot_config.paper_trading,
         )
         try:
             # 1. Fetch market data
@@ -71,7 +76,13 @@ async def run_strategy_cycle(strategy_id: str):
 
             if result_sig.signal == Signal.HOLD:
                 await db.commit()
-                return
+                return {
+                    "status": "COMPLETED",
+                    "signal": result_sig.signal,
+                    "reason": result_sig.reason,
+                    "indicators": result_sig.indicators,
+                    "trade_id": None,
+                }
 
             # 4. Check for open trade — avoid double entry
             open_trade = await db.execute(
@@ -83,11 +94,20 @@ async def run_strategy_cycle(strategy_id: str):
             if open_trade.scalar_one_or_none():
                 logger.info(f"[{strategy.symbol}] Trade already open, skipping.")
                 await db.commit()
-                return
+                return {
+                    "status": "SKIPPED",
+                    "signal": result_sig.signal,
+                    "reason": "Trade already open",
+                    "indicators": result_sig.indicators,
+                    "trade_id": None,
+                }
 
             # 5. Risk check
-            balance    = await binance.fetch_balance()
-            usdt_avail = balance.get("USDT", 0)
+            if strategy.bot_config.paper_trading:
+                usdt_avail = 1000
+            else:
+                balance    = await binance.fetch_balance()
+                usdt_avail = balance.get("USDT", 0)
             ticker     = await binance.fetch_ticker(strategy.symbol)
             price      = ticker["last"]
 
@@ -96,15 +116,33 @@ async def run_strategy_cycle(strategy_id: str):
             if not order:
                 logger.warning(f"[{strategy.symbol}] Risk check failed, order skipped.")
                 await db.commit()
-                return
+                return {
+                    "status": "SKIPPED",
+                    "signal": result_sig.signal,
+                    "reason": "Risk check failed",
+                    "indicators": result_sig.indicators,
+                    "trade_id": None,
+                }
 
             # 6. Execute order
-            executor = OrderExecutor(binance, db)
+            executor = OrderExecutor(
+                binance,
+                db,
+                paper_trading=strategy.bot_config.paper_trading,
+            )
             trade = await executor.execute(strategy, order)
             logger.info(f"[{strategy.symbol}] Trade executed: {trade.id} @ {trade.entry_price}")
+            return {
+                "status": "COMPLETED",
+                "signal": result_sig.signal,
+                "reason": result_sig.reason,
+                "indicators": result_sig.indicators,
+                "trade_id": str(trade.id),
+            }
 
         except Exception as e:
             logger.error(f"Strategy cycle error [{strategy_id}]: {e}", exc_info=True)
+            return {"status": "FAILED", "reason": str(e)}
         finally:
             await binance.close()
 

@@ -10,16 +10,23 @@ from app.core.security import decrypt_key
 
 
 class BinanceService:
-    def __init__(self, api_key_enc: str, secret_enc: str, testnet: bool = True):
-        api_key = decrypt_key(api_key_enc)
-        secret  = decrypt_key(secret_enc)
-
-        self.exchange = ccxt.binance({
-            "apiKey": api_key,
-            "secret": secret,
+    def __init__(
+        self,
+        api_key_enc: str,
+        secret_enc: str,
+        testnet: bool = True,
+        use_credentials: bool = True,
+    ):
+        config = {
             "enableRateLimit": True,
             "options": {"defaultType": "spot"},
-        })
+        }
+
+        if use_credentials:
+            config["apiKey"] = decrypt_key(api_key_enc)
+            config["secret"] = decrypt_key(secret_enc)
+
+        self.exchange = ccxt.binance(config)
 
         if testnet:
             self.exchange.set_sandbox_mode(True)

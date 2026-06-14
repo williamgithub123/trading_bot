@@ -74,6 +74,7 @@ class Strategy(Base):
     user       = relationship("User", back_populates="strategies")
     bot_config = relationship("BotConfig", back_populates="strategy", uselist=False)
     trades     = relationship("Trade", back_populates="strategy")
+    runs       = relationship("StrategyRun", back_populates="strategy", cascade="all, delete")
 
 
 # ─── BotConfig ───────────────────────────────────────────────────────────────
@@ -125,6 +126,23 @@ class Trade(Base):
     closed_at    = Column(DateTime, nullable=True)
 
     strategy     = relationship("Strategy", back_populates="trades")
+
+
+# ─── StrategyRun ─────────────────────────────────────────────────────────────
+
+class StrategyRun(Base):
+    __tablename__ = "strategy_runs"
+
+    id          = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    strategy_id = Column(UUID(as_uuid=True), ForeignKey("strategies.id"), nullable=False, index=True)
+
+    signal     = Column(String(20), nullable=False)
+    reason     = Column(Text, nullable=False)
+    indicators = Column(Text, nullable=False, default="{}")
+    price      = Column(Float, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+    strategy = relationship("Strategy", back_populates="runs")
 
 
 # ─── PriceCandle (TimescaleDB hypertable) ────────────────────────────────────

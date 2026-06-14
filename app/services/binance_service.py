@@ -2,7 +2,7 @@
 Binance Exchange Service — ccxt async wrapper
 """
 import asyncio
-import ccxt.async_support as ccxt
+import ccxt
 from typing import List, Optional
 import pandas as pd
 
@@ -32,12 +32,14 @@ class BinanceService:
             self.exchange.set_sandbox_mode(True)
 
     async def close(self):
-        await self.exchange.close()
+        close = getattr(self.exchange, "close", None)
+        if callable(close):
+            await asyncio.to_thread(close)
 
     # ── Market data ───────────────────────────────────────────────────────────
 
     async def fetch_ticker(self, symbol: str) -> dict:
-        return await self.exchange.fetch_ticker(symbol)
+        return await asyncio.to_thread(self.exchange.fetch_ticker, symbol)
 
     async def fetch_ohlcv(
         self,
@@ -45,13 +47,19 @@ class BinanceService:
         timeframe: str = "1h",
         limit: int = 200,
     ) -> pd.DataFrame:
-        raw = await self.exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
+        raw = await asyncio.to_thread(
+            self.exchange.fetch_ohlcv,
+            symbol,
+            timeframe,
+            None,
+            limit,
+        )
         df = pd.DataFrame(raw, columns=["timestamp", "open", "high", "low", "close", "volume"])
         df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
         return df
 
     async def fetch_balance(self) -> dict:
-        balance = await self.exchange.fetch_balance()
+        balance = await asyncio.to_thread(self.exchange.fetch_balance)
         return {k: v for k, v in balance["total"].items() if v > 0}
 
     # ── Orders ────────────────────────────────────────────────────────────────
@@ -59,18 +67,31 @@ class BinanceService:
     async def create_market_order(
         self, symbol: str, side: str, amount: float
     ) -> dict:
-        return await self.exchange.create_order(symbol, "market", side, amount)
+        return await asyncio.to_thread(
+            self.exchange.create_order,
+            symbol,
+            "market",
+            side,
+            amount,
+        )
 
     async def create_limit_order(
         self, symbol: str, side: str, amount: float, price: float
     ) -> dict:
-        return await self.exchange.create_order(symbol, "limit", side, amount, price)
+        return await asyncio.to_thread(
+            self.exchange.create_order,
+            symbol,
+            "limit",
+            side,
+            amount,
+            price,
+        )
 
     async def cancel_order(self, order_id: str, symbol: str) -> dict:
-        return await self.exchange.cancel_order(order_id, symbol)
+        return await asyncio.to_thread(self.exchange.cancel_order, order_id, symbol)
 
     async def fetch_order(self, order_id: str, symbol: str) -> dict:
-        return await self.exchange.fetch_order(order_id, symbol)
+        return await asyncio.to_thread(self.exchange.fetch_order, order_id, symbol)
 
     async def fetch_open_orders(self, symbol: Optional[str] = None) -> List[dict]:
-        return await self.exchange.fetch_open_orders(symbol)
+        return await asyncio.to_thread(self.exchange.fetch_open_orders, symbol)

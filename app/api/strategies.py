@@ -104,6 +104,28 @@ async def update_strategy(
     return _strat_dict(strategy)
 
 
+@router.delete("/runs/{run_id}", status_code=204)
+async def delete_strategy_run(
+    run_id:       str,
+    current_user: User         = Depends(get_current_user),
+    db:           AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(StrategyRun)
+        .join(Strategy)
+        .where(
+            StrategyRun.id == run_id,
+            Strategy.user_id == current_user.id,
+        )
+    )
+    run = result.scalar_one_or_none()
+    if not run:
+        raise HTTPException(404, "Strategy run not found")
+
+    await db.delete(run)
+    await db.commit()
+
+
 @router.delete("/{strategy_id}", status_code=204)
 async def delete_strategy(
     strategy_id:  str,

@@ -52,18 +52,33 @@ def sma_crossover(df: pd.DataFrame, params: dict) -> StrategyResult:
 
     golden_cross = prev["sma_fast"] <= prev["sma_slow"] and curr["sma_fast"] > curr["sma_slow"]
     death_cross  = prev["sma_fast"] >= prev["sma_slow"] and curr["sma_fast"] < curr["sma_slow"]
+    sma_spread = curr["sma_fast"] - curr["sma_slow"]
+    sma_spread_pct = (sma_spread / curr["sma_slow"]) * 100 if curr["sma_slow"] else 0
+    if sma_spread > 0:
+        trend_bias = "bullish"
+        trend_label = "Fast SMA above slow SMA"
+    elif sma_spread < 0:
+        trend_bias = "bearish"
+        trend_label = "Fast SMA below slow SMA"
+    else:
+        trend_bias = "neutral"
+        trend_label = "Fast and slow SMA aligned"
 
     indicators = {
         "sma_fast": float(round(curr["sma_fast"], 4)),
         "sma_slow": float(round(curr["sma_slow"], 4)),
         "price":    float(round(curr["close"], 4)),
+        "trend_bias": trend_bias,
+        "trend_label": trend_label,
+        "sma_spread": float(round(sma_spread, 4)),
+        "sma_spread_pct": float(round(sma_spread_pct, 4)),
     }
 
     if golden_cross:
-        return StrategyResult(Signal.BUY,  0.75, f"Golden cross SMA{fast}/SMA{slow}", indicators)
+        return StrategyResult(Signal.BUY,  0.75, f"Golden cross SMA{fast}/SMA{slow} - {trend_bias} bias", indicators)
     if death_cross:
-        return StrategyResult(Signal.SELL, 0.75, f"Death cross SMA{fast}/SMA{slow}",  indicators)
-    return StrategyResult(Signal.HOLD, 0.0, "No crossover", indicators)
+        return StrategyResult(Signal.SELL, 0.75, f"Death cross SMA{fast}/SMA{slow} - {trend_bias} bias",  indicators)
+    return StrategyResult(Signal.HOLD, 0.0, f"No crossover - {trend_bias} bias", indicators)
 
 
 # ── RSI Strategy ──────────────────────────────────────────────────────────────

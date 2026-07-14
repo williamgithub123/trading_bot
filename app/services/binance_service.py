@@ -3,6 +3,7 @@ Binance Exchange Service — ccxt async wrapper
 """
 import asyncio
 import ccxt
+from datetime import datetime
 from typing import List, Optional
 import pandas as pd
 
@@ -58,6 +59,61 @@ class BinanceService:
         df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
         return df
 
+    async def fetch_ohlcv_range(
+        self,
+        symbol: str,
+        timeframe: str = "1h",
+        since: datetime | None = None,
+        until: datetime | None = None,
+        page_limit: int = 1000,
+        max_candles: int = 20000,
+    ) -> pd.DataFrame:
+        since_ms = _datetime_to_milliseconds(since) if since else None
+        until_ms = _datetime_to_milliseconds(until) if until else None
+        all_rows: list[list] = []
+        cursor = since_ms
+
+        while len(all_rows) < max_candles:
+            raw = await asyncio.to_thread(
+                self.exchange.fetch_ohlcv,
+                symbol,
+                timeframe,
+                cursor,
+                min(page_limit, max_candles - len(all_rows)),
+            )
+
+            if not raw:
+                break
+
+            filtered = [
+                row
+                for row in raw
+                if until_ms is None or int(row[0]) <= until_ms
+            ]
+            all_rows.extend(filtered)
+
+            last_timestamp = int(raw[-1][0])
+            if until_ms is not None and last_timestamp >= until_ms:
+                break
+            if cursor is not None and last_timestamp <= cursor:
+                break
+            if len(raw) < page_limit:
+                break
+
+            cursor = last_timestamp + 1
+            await asyncio.sleep(self.exchange.rateLimit / 1000)
+
+        df = pd.DataFrame(
+            all_rows,
+            columns=["timestamp", "open", "high", "low", "close", "volume"],
+        )
+        if df.empty:
+            return df
+
+        df = df.drop_duplicates(subset=["timestamp"]).sort_values("timestamp")
+        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+        return df.reset_index(drop=True)
+
     async def fetch_balance(self) -> dict:
         balance = await asyncio.to_thread(self.exchange.fetch_balance)
         return {k: v for k, v in balance["total"].items() if v > 0}
@@ -95,3 +151,12 @@ class BinanceService:
 
     async def fetch_open_orders(self, symbol: Optional[str] = None) -> List[dict]:
         return await asyncio.to_thread(self.exchange.fetch_open_orders, symbol)
+
+
+def _datetime_to_milliseconds(value: datetime) -> int:
+    timestamp = pd.Timestamp(value)
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.tz_localize("UTC")
+    else:
+        timestamp = timestamp.tz_convert("UTC")
+    return int(timestamp.timestamp() * 1000)

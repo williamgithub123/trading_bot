@@ -66,6 +66,9 @@ def run_sma_crossover_backtest(
     _validate_inputs(candles, fast, slow, initial_capital, stop_loss_pct)
 
     df = candles.copy().sort_values("timestamp").reset_index(drop=True)
+    candles_count = len(df)
+    candle_start = _to_datetime(df.iloc[0]["timestamp"]) if candles_count else None
+    candle_end = _to_datetime(df.iloc[-1]["timestamp"]) if candles_count else None
     df["sma_fast"] = ta.sma(df["close"], length=fast)
     df["sma_slow"] = ta.sma(df["close"], length=slow)
     df = df.dropna(subset=["sma_fast", "sma_slow"]).reset_index(drop=True)
@@ -78,6 +81,9 @@ def run_sma_crossover_backtest(
             slow,
             initial_capital,
             stop_loss_pct,
+            candles_count,
+            candle_start,
+            candle_end,
         )
 
     cash = initial_capital
@@ -152,6 +158,9 @@ def run_sma_crossover_backtest(
         slow=slow,
         initial_capital=initial_capital,
         stop_loss_pct=stop_loss_pct,
+        candles_count=candles_count,
+        candle_start=candle_start,
+        candle_end=candle_end,
         final_equity=final_equity,
         trades=trades,
         equity_curve=equity_curve,
@@ -187,6 +196,9 @@ def _build_result(
     slow: int,
     initial_capital: float,
     stop_loss_pct: float | None,
+    candles_count: int,
+    candle_start: datetime | None,
+    candle_end: datetime | None,
     final_equity: float,
     trades: list[BacktestTrade],
     equity_curve: list[EquityPoint],
@@ -205,6 +217,9 @@ def _build_result(
         "slow": slow,
         "initial_capital": round(initial_capital, 4),
         "stop_loss_pct": round(stop_loss_pct, 4) if stop_loss_pct is not None else None,
+        "candles_count": candles_count,
+        "candle_start": candle_start.isoformat() if candle_start else None,
+        "candle_end": candle_end.isoformat() if candle_end else None,
         "final_equity": round(final_equity, 4),
         "pnl": round(pnl, 4),
         "pnl_pct": round(pnl_pct, 4),
@@ -225,6 +240,9 @@ def _empty_result(
     slow: int,
     initial_capital: float,
     stop_loss_pct: float | None,
+    candles_count: int = 0,
+    candle_start: datetime | None = None,
+    candle_end: datetime | None = None,
 ) -> dict[str, Any]:
     return _build_result(
         symbol=symbol,
@@ -233,6 +251,9 @@ def _empty_result(
         slow=slow,
         initial_capital=initial_capital,
         stop_loss_pct=stop_loss_pct,
+        candles_count=candles_count,
+        candle_start=candle_start,
+        candle_end=candle_end,
         final_equity=initial_capital,
         trades=[],
         equity_curve=[],

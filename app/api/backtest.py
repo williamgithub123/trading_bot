@@ -20,6 +20,7 @@ class SmaBacktestRequest(BaseModel):
     slow: int = Field(25, ge=3, le=500)
     limit: int = Field(365, ge=50, le=1000)
     initial_capital: float = Field(1000.0, gt=0)
+    stop_loss_pct: float | None = Field(default=None, gt=0, le=100)
 
     @model_validator(mode="after")
     def validate_sma_periods(self):
@@ -58,6 +59,7 @@ async def run_sma_backtest(
             fast=body.fast,
             slow=body.slow,
             initial_capital=body.initial_capital,
+            stop_loss_pct=body.stop_loss_pct,
         )
     except ccxt.BadSymbol as exc:
         raise HTTPException(

@@ -5,7 +5,8 @@ The first implementation supports an SMA crossover long-only strategy:
 - golden cross opens a long position
 - death cross closes the open position
 - one position at a time
-- no fees, slippage, stop-loss, or take-profit yet
+- optional stop-loss support
+- no fees, slippage, or take-profit yet
 """
 from dataclasses import dataclass
 from datetime import datetime
@@ -24,6 +25,7 @@ class BacktestTrade:
     quantity: float
     pnl: float
     pnl_pct: float
+    exit_reason: str
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -34,6 +36,7 @@ class BacktestTrade:
             "quantity": round(self.quantity, 8),
             "pnl": round(self.pnl, 4),
             "pnl_pct": round(self.pnl_pct, 4),
+            "exit_reason": self.exit_reason,
         }
 
 
@@ -57,9 +60,10 @@ def run_sma_crossover_backtest(
     fast: int = 7,
     slow: int = 25,
     initial_capital: float = 1000.0,
+    stop_loss_pct: float | None = None,
 ) -> dict[str, Any]:
     """Run a simple SMA crossover backtest over historical OHLCV candles."""
-    _validate_inputs(candles, fast, slow, initial_capital)
+    _validate_inputs(candles, fast, slow, initial_capital, stop_loss_pct)
 
     df = candles.copy().sort_values("timestamp").reset_index(drop=True)
     df["sma_fast"] = ta.sma(df["close"], length=fast)
@@ -67,7 +71,14 @@ def run_sma_crossover_backtest(
     df = df.dropna(subset=["sma_fast", "sma_slow"]).reset_index(drop=True)
 
     if len(df) < 2:
-        return _empty_result(symbol, timeframe, fast, slow, initial_capital)
+        return _empty_result(
+            symbol,
+            timeframe,
+            fast,
+            slow,
+            initial_capital,
+            stop_loss_pct,
+        )
 
     cash = initial_capital
     quantity = 0.0
@@ -91,13 +102,20 @@ def run_sma_crossover_backtest(
             and curr["sma_fast"] < curr["sma_slow"]
         )
 
-        if quantity == 0 and golden_cross:
-            entry_price = price
-            entry_at = timestamp
-            quantity = cash / price
-            cash = 0.0
-        elif quantity > 0 and death_cross and entry_at is not None:
-            cash = quantity * price
+        exit_reason = None
+        exit_price = price
+
+        if quantity > 0 and entry_at is not None and stop_loss_pct is not None:
+            stop_price = entry_price * (1 - (stop_loss_pct / 100))
+            if _stop_loss_hit(curr, stop_price):
+                exit_reason = "stop_loss"
+                exit_price = stop_price
+
+        if exit_reason is None and quantity > 0 and death_cross:
+            exit_reason = "death_cross"
+
+        if quantity > 0 and exit_reason is not None and entry_at is not None:
+            cash = quantity * exit_price
             trade_cost = quantity * entry_price
             pnl = cash - trade_cost
             pnl_pct = (pnl / trade_cost) * 100 if trade_cost else 0.0
@@ -106,15 +124,21 @@ def run_sma_crossover_backtest(
                     entry_at=entry_at,
                     exit_at=timestamp,
                     entry_price=entry_price,
-                    exit_price=price,
+                    exit_price=exit_price,
                     quantity=quantity,
                     pnl=pnl,
                     pnl_pct=pnl_pct,
+                    exit_reason=exit_reason,
                 )
             )
             quantity = 0.0
             entry_price = 0.0
             entry_at = None
+        elif quantity == 0 and golden_cross:
+            entry_price = price
+            entry_at = timestamp
+            quantity = cash / price
+            cash = 0.0
 
         equity = cash if quantity == 0 else quantity * price
         equity_curve.append(EquityPoint(timestamp=timestamp, equity=equity))
@@ -127,6 +151,7 @@ def run_sma_crossover_backtest(
         fast=fast,
         slow=slow,
         initial_capital=initial_capital,
+        stop_loss_pct=stop_loss_pct,
         final_equity=final_equity,
         trades=trades,
         equity_curve=equity_curve,
@@ -138,6 +163,7 @@ def _validate_inputs(
     fast: int,
     slow: int,
     initial_capital: float,
+    stop_loss_pct: float | None,
 ) -> None:
     required = {"timestamp", "close"}
     missing = required - set(candles.columns)
@@ -149,6 +175,8 @@ def _validate_inputs(
         raise ValueError("Fast SMA period must be lower than slow SMA period")
     if initial_capital <= 0:
         raise ValueError("Initial capital must be positive")
+    if stop_loss_pct is not None and stop_loss_pct <= 0:
+        raise ValueError("Stop-loss percentage must be positive")
 
 
 def _build_result(
@@ -158,6 +186,7 @@ def _build_result(
     fast: int,
     slow: int,
     initial_capital: float,
+    stop_loss_pct: float | None,
     final_equity: float,
     trades: list[BacktestTrade],
     equity_curve: list[EquityPoint],
@@ -175,6 +204,7 @@ def _build_result(
         "fast": fast,
         "slow": slow,
         "initial_capital": round(initial_capital, 4),
+        "stop_loss_pct": round(stop_loss_pct, 4) if stop_loss_pct is not None else None,
         "final_equity": round(final_equity, 4),
         "pnl": round(pnl, 4),
         "pnl_pct": round(pnl_pct, 4),
@@ -194,6 +224,7 @@ def _empty_result(
     fast: int,
     slow: int,
     initial_capital: float,
+    stop_loss_pct: float | None,
 ) -> dict[str, Any]:
     return _build_result(
         symbol=symbol,
@@ -201,6 +232,7 @@ def _empty_result(
         fast=fast,
         slow=slow,
         initial_capital=initial_capital,
+        stop_loss_pct=stop_loss_pct,
         final_equity=initial_capital,
         trades=[],
         equity_curve=[],
@@ -223,3 +255,9 @@ def _to_datetime(value: Any) -> datetime:
     if isinstance(value, datetime):
         return value
     return pd.to_datetime(value).to_pydatetime()
+
+
+def _stop_loss_hit(row: pd.Series, stop_price: float) -> bool:
+    if "low" in row and pd.notna(row["low"]):
+        return float(row["low"]) <= stop_price
+    return float(row["close"]) <= stop_price

@@ -69,6 +69,7 @@ def run_sma_crossover_backtest(
     candles_count = len(df)
     candle_start = _to_datetime(df.iloc[0]["timestamp"]) if candles_count else None
     candle_end = _to_datetime(df.iloc[-1]["timestamp"]) if candles_count else None
+    buy_and_hold = _buy_and_hold_result(df, initial_capital)
     df["sma_fast"] = ta.sma(df["close"], length=fast)
     df["sma_slow"] = ta.sma(df["close"], length=slow)
     df = df.dropna(subset=["sma_fast", "sma_slow"]).reset_index(drop=True)
@@ -84,6 +85,7 @@ def run_sma_crossover_backtest(
             candles_count,
             candle_start,
             candle_end,
+            buy_and_hold,
         )
 
     cash = initial_capital
@@ -161,6 +163,7 @@ def run_sma_crossover_backtest(
         candles_count=candles_count,
         candle_start=candle_start,
         candle_end=candle_end,
+        buy_and_hold=buy_and_hold,
         final_equity=final_equity,
         trades=trades,
         equity_curve=equity_curve,
@@ -199,6 +202,7 @@ def _build_result(
     candles_count: int,
     candle_start: datetime | None,
     candle_end: datetime | None,
+    buy_and_hold: dict[str, Any],
     final_equity: float,
     trades: list[BacktestTrade],
     equity_curve: list[EquityPoint],
@@ -209,6 +213,9 @@ def _build_result(
     pnl = final_equity - initial_capital
     pnl_pct = (pnl / initial_capital) * 100
     win_rate = (winning_trades / total_trades) * 100 if total_trades else 0.0
+    strategy_drawdown_pct = _max_drawdown_pct(equity_curve)
+    buy_and_hold_pnl_pct = float(buy_and_hold.get("pnl_pct", 0.0))
+    buy_and_hold_drawdown_pct = float(buy_and_hold.get("max_drawdown_pct", 0.0))
 
     return {
         "symbol": symbol,
@@ -227,7 +234,15 @@ def _build_result(
         "winning_trades": winning_trades,
         "losing_trades": losing_trades,
         "win_rate": round(win_rate, 4),
-        "max_drawdown_pct": round(_max_drawdown_pct(equity_curve), 4),
+        "max_drawdown_pct": round(strategy_drawdown_pct, 4),
+        "buy_and_hold": buy_and_hold,
+        "comparison": {
+            "alpha_pct": round(pnl_pct - buy_and_hold_pnl_pct, 4),
+            "drawdown_reduction_pct": round(
+                buy_and_hold_drawdown_pct - strategy_drawdown_pct,
+                4,
+            ),
+        },
         "trades": [trade.to_dict() for trade in trades],
         "equity_curve": [point.to_dict() for point in equity_curve],
     }
@@ -243,6 +258,7 @@ def _empty_result(
     candles_count: int = 0,
     candle_start: datetime | None = None,
     candle_end: datetime | None = None,
+    buy_and_hold: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return _build_result(
         symbol=symbol,
@@ -254,6 +270,7 @@ def _empty_result(
         candles_count=candles_count,
         candle_start=candle_start,
         candle_end=candle_end,
+        buy_and_hold=buy_and_hold or _empty_buy_and_hold_result(initial_capital),
         final_equity=initial_capital,
         trades=[],
         equity_curve=[],
@@ -270,6 +287,57 @@ def _max_drawdown_pct(equity_curve: list[EquityPoint]) -> float:
         drawdown = ((peak - point.equity) / peak) * 100
         max_drawdown = max(max_drawdown, drawdown)
     return max_drawdown
+
+
+def _buy_and_hold_result(
+    candles: pd.DataFrame,
+    initial_capital: float,
+) -> dict[str, Any]:
+    if candles.empty:
+        return _empty_buy_and_hold_result(initial_capital)
+
+    first = candles.iloc[0]
+    last = candles.iloc[-1]
+    entry_price = float(first["close"])
+    exit_price = float(last["close"])
+    quantity = initial_capital / entry_price if entry_price else 0.0
+    final_equity = quantity * exit_price
+    pnl = final_equity - initial_capital
+    pnl_pct = (pnl / initial_capital) * 100 if initial_capital else 0.0
+
+    equity_curve = [
+        EquityPoint(
+            timestamp=_to_datetime(row["timestamp"]),
+            equity=quantity * float(row["close"]),
+        )
+        for _, row in candles.iterrows()
+    ]
+
+    return {
+        "entry_at": _to_datetime(first["timestamp"]).isoformat(),
+        "exit_at": _to_datetime(last["timestamp"]).isoformat(),
+        "entry_price": round(entry_price, 4),
+        "exit_price": round(exit_price, 4),
+        "quantity": round(quantity, 8),
+        "final_equity": round(final_equity, 4),
+        "pnl": round(pnl, 4),
+        "pnl_pct": round(pnl_pct, 4),
+        "max_drawdown_pct": round(_max_drawdown_pct(equity_curve), 4),
+    }
+
+
+def _empty_buy_and_hold_result(initial_capital: float) -> dict[str, Any]:
+    return {
+        "entry_at": None,
+        "exit_at": None,
+        "entry_price": None,
+        "exit_price": None,
+        "quantity": 0.0,
+        "final_equity": round(initial_capital, 4),
+        "pnl": 0.0,
+        "pnl_pct": 0.0,
+        "max_drawdown_pct": 0.0,
+    }
 
 
 def _to_datetime(value: Any) -> datetime:

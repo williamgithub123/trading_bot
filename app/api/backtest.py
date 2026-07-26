@@ -26,17 +26,23 @@ class SmaBacktestRequest(BaseModel):
     max_candles: int = Field(20000, ge=100, le=50000)
     initial_capital: float = Field(1000.0, gt=0)
     stop_loss_pct: float | None = Field(default=None, gt=0, le=100)
+    trend_filter_enabled: bool = False
+    trend_sma_period: int = Field(200, ge=4, le=1000)
+    trend_require_rising: bool = False
 
     @model_validator(mode="after")
     def validate_sma_periods(self):
         if self.fast >= self.slow:
             raise ValueError("Fast SMA period must be lower than slow SMA period")
+        if self.trend_filter_enabled and self.trend_sma_period <= self.slow:
+            raise ValueError("Trend SMA period must be greater than slow SMA period")
         if (self.start_date is None) != (self.end_date is None):
             raise ValueError("start_date and end_date must be provided together")
         if self.start_date and self.end_date and self.start_date >= self.end_date:
             raise ValueError("start_date must be before end_date")
-        if self.start_date is None and self.limit <= self.slow:
-            raise ValueError("Candle limit must be greater than slow SMA period")
+        required_limit = self.trend_sma_period if self.trend_filter_enabled else self.slow
+        if self.start_date is None and self.limit <= required_limit:
+            raise ValueError("Candle limit must be greater than the largest SMA period")
         return self
 
 
@@ -92,6 +98,9 @@ async def run_sma_backtest(
             slow=body.slow,
             initial_capital=body.initial_capital,
             stop_loss_pct=body.stop_loss_pct,
+            trend_filter_enabled=body.trend_filter_enabled,
+            trend_sma_period=body.trend_sma_period,
+            trend_require_rising=body.trend_require_rising,
         )
     except ccxt.BadSymbol as exc:
         raise HTTPException(

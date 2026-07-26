@@ -6,6 +6,7 @@ The first implementation supports an SMA crossover long-only strategy:
 - death cross closes the open position
 - one position at a time
 - optional stop-loss support
+- optional trend filter support
 - no fees, slippage, or take-profit yet
 """
 from dataclasses import dataclass
@@ -61,9 +62,20 @@ def run_sma_crossover_backtest(
     slow: int = 25,
     initial_capital: float = 1000.0,
     stop_loss_pct: float | None = None,
+    trend_filter_enabled: bool = False,
+    trend_sma_period: int = 200,
+    trend_require_rising: bool = False,
 ) -> dict[str, Any]:
     """Run a simple SMA crossover backtest over historical OHLCV candles."""
-    _validate_inputs(candles, fast, slow, initial_capital, stop_loss_pct)
+    _validate_inputs(
+        candles,
+        fast,
+        slow,
+        initial_capital,
+        stop_loss_pct,
+        trend_filter_enabled,
+        trend_sma_period,
+    )
 
     df = candles.copy().sort_values("timestamp").reset_index(drop=True)
     candles_count = len(df)
@@ -72,7 +84,11 @@ def run_sma_crossover_backtest(
     buy_and_hold = _buy_and_hold_result(df, initial_capital)
     df["sma_fast"] = ta.sma(df["close"], length=fast)
     df["sma_slow"] = ta.sma(df["close"], length=slow)
-    df = df.dropna(subset=["sma_fast", "sma_slow"]).reset_index(drop=True)
+    required_sma_columns = ["sma_fast", "sma_slow"]
+    if trend_filter_enabled:
+        df["sma_trend"] = ta.sma(df["close"], length=trend_sma_period)
+        required_sma_columns.append("sma_trend")
+    df = df.dropna(subset=required_sma_columns).reset_index(drop=True)
 
     if len(df) < 2:
         return _empty_result(
@@ -86,6 +102,9 @@ def run_sma_crossover_backtest(
             candle_start,
             candle_end,
             buy_and_hold,
+            trend_filter_enabled,
+            trend_sma_period,
+            trend_require_rising,
         )
 
     cash = initial_capital
@@ -94,6 +113,8 @@ def run_sma_crossover_backtest(
     entry_at: datetime | None = None
     trades: list[BacktestTrade] = []
     equity_curve: list[EquityPoint] = []
+    golden_cross_count = 0
+    skipped_by_trend_count = 0
 
     for index in range(1, len(df)):
         prev = df.iloc[index - 1]
@@ -143,6 +164,16 @@ def run_sma_crossover_backtest(
             entry_price = 0.0
             entry_at = None
         elif quantity == 0 and golden_cross:
+            golden_cross_count += 1
+            if not _trend_allows_entry(
+                prev=prev,
+                curr=curr,
+                enabled=trend_filter_enabled,
+                require_rising=trend_require_rising,
+            ):
+                skipped_by_trend_count += 1
+                equity_curve.append(EquityPoint(timestamp=timestamp, equity=cash))
+                continue
             entry_price = price
             entry_at = timestamp
             quantity = cash / price
@@ -167,6 +198,11 @@ def run_sma_crossover_backtest(
         final_equity=final_equity,
         trades=trades,
         equity_curve=equity_curve,
+        trend_filter_enabled=trend_filter_enabled,
+        trend_sma_period=trend_sma_period,
+        trend_require_rising=trend_require_rising,
+        golden_cross_count=golden_cross_count,
+        skipped_by_trend_count=skipped_by_trend_count,
     )
 
 
@@ -176,6 +212,8 @@ def _validate_inputs(
     slow: int,
     initial_capital: float,
     stop_loss_pct: float | None,
+    trend_filter_enabled: bool,
+    trend_sma_period: int,
 ) -> None:
     required = {"timestamp", "close"}
     missing = required - set(candles.columns)
@@ -189,6 +227,8 @@ def _validate_inputs(
         raise ValueError("Initial capital must be positive")
     if stop_loss_pct is not None and stop_loss_pct <= 0:
         raise ValueError("Stop-loss percentage must be positive")
+    if trend_filter_enabled and trend_sma_period <= slow:
+        raise ValueError("Trend SMA period must be greater than slow SMA period")
 
 
 def _build_result(
@@ -206,6 +246,11 @@ def _build_result(
     final_equity: float,
     trades: list[BacktestTrade],
     equity_curve: list[EquityPoint],
+    trend_filter_enabled: bool,
+    trend_sma_period: int,
+    trend_require_rising: bool,
+    golden_cross_count: int,
+    skipped_by_trend_count: int,
 ) -> dict[str, Any]:
     total_trades = len(trades)
     winning_trades = len([trade for trade in trades if trade.pnl > 0])
@@ -224,6 +269,11 @@ def _build_result(
         "slow": slow,
         "initial_capital": round(initial_capital, 4),
         "stop_loss_pct": round(stop_loss_pct, 4) if stop_loss_pct is not None else None,
+        "trend_filter": {
+            "enabled": trend_filter_enabled,
+            "sma_period": trend_sma_period if trend_filter_enabled else None,
+            "require_rising": trend_require_rising if trend_filter_enabled else None,
+        },
         "candles_count": candles_count,
         "candle_start": candle_start.isoformat() if candle_start else None,
         "candle_end": candle_end.isoformat() if candle_end else None,
@@ -243,6 +293,10 @@ def _build_result(
                 4,
             ),
         },
+        "signals": {
+            "golden_cross_count": golden_cross_count,
+            "skipped_by_trend_count": skipped_by_trend_count,
+        },
         "trades": [trade.to_dict() for trade in trades],
         "equity_curve": [point.to_dict() for point in equity_curve],
     }
@@ -259,6 +313,9 @@ def _empty_result(
     candle_start: datetime | None = None,
     candle_end: datetime | None = None,
     buy_and_hold: dict[str, Any] | None = None,
+    trend_filter_enabled: bool = False,
+    trend_sma_period: int = 200,
+    trend_require_rising: bool = False,
 ) -> dict[str, Any]:
     return _build_result(
         symbol=symbol,
@@ -274,6 +331,11 @@ def _empty_result(
         final_equity=initial_capital,
         trades=[],
         equity_curve=[],
+        trend_filter_enabled=trend_filter_enabled,
+        trend_sma_period=trend_sma_period,
+        trend_require_rising=trend_require_rising,
+        golden_cross_count=0,
+        skipped_by_trend_count=0,
     )
 
 
@@ -350,3 +412,23 @@ def _stop_loss_hit(row: pd.Series, stop_price: float) -> bool:
     if "low" in row and pd.notna(row["low"]):
         return float(row["low"]) <= stop_price
     return float(row["close"]) <= stop_price
+
+
+def _trend_allows_entry(
+    *,
+    prev: pd.Series,
+    curr: pd.Series,
+    enabled: bool,
+    require_rising: bool,
+) -> bool:
+    if not enabled:
+        return True
+
+    price_above_trend = float(curr["close"]) > float(curr["sma_trend"])
+    if not price_above_trend:
+        return False
+
+    if require_rising:
+        return float(curr["sma_trend"]) > float(prev["sma_trend"])
+
+    return True

@@ -5,7 +5,7 @@ Compatible with PostgreSQL / TimescaleDB
 from datetime import datetime
 from sqlalchemy import (
     Column, String, Float, Boolean, DateTime,
-    ForeignKey, Enum, Text, Integer
+    ForeignKey, Enum, Text, Integer, Date
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
@@ -45,6 +45,7 @@ class User(Base):
 
     strategies    = relationship("Strategy", back_populates="user", cascade="all, delete")
     bot_configs   = relationship("BotConfig", back_populates="user", cascade="all, delete")
+    backtest_runs = relationship("BacktestRun", back_populates="user", cascade="all, delete")
 
 
 # ─── Strategy ────────────────────────────────────────────────────────────────
@@ -146,6 +147,50 @@ class StrategyRun(Base):
 
 
 # ─── PriceCandle (TimescaleDB hypertable) ────────────────────────────────────
+
+class BacktestRun(Base):
+    __tablename__ = "backtest_runs"
+
+    id      = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
+
+    strategy_type = Column(String(50), nullable=False, default="sma_crossover")
+    symbol        = Column(String(20), nullable=False, index=True)
+    timeframe     = Column(String(10), nullable=False, index=True)
+
+    fast            = Column(Integer, nullable=False)
+    slow            = Column(Integer, nullable=False)
+    start_date      = Column(Date, nullable=True)
+    end_date        = Column(Date, nullable=True)
+    limit           = Column(Integer, nullable=True)
+    max_candles     = Column(Integer, nullable=True)
+    initial_capital = Column(Float, nullable=False)
+
+    stop_loss_pct        = Column(Float, nullable=True)
+    trend_filter_enabled = Column(Boolean, default=False)
+    trend_sma_period     = Column(Integer, nullable=True)
+    trend_require_rising = Column(Boolean, default=False)
+
+    candles_count        = Column(Integer, default=0)
+    candle_start         = Column(DateTime, nullable=True)
+    candle_end           = Column(DateTime, nullable=True)
+    final_equity         = Column(Float, nullable=False)
+    pnl                  = Column(Float, nullable=False)
+    pnl_pct              = Column(Float, nullable=False)
+    total_trades         = Column(Integer, default=0)
+    winning_trades       = Column(Integer, default=0)
+    losing_trades        = Column(Integer, default=0)
+    win_rate             = Column(Float, default=0.0)
+    max_drawdown_pct     = Column(Float, default=0.0)
+    buy_and_hold_pnl_pct = Column(Float, default=0.0)
+    alpha_pct            = Column(Float, default=0.0)
+
+    request_json = Column(Text, nullable=False, default="{}")
+    result_json  = Column(Text, nullable=False, default="{}")
+    created_at   = Column(DateTime, default=datetime.utcnow, index=True)
+
+    user = relationship("User", back_populates="backtest_runs")
+
 
 class PriceCandle(Base):
     __tablename__ = "price_candles"

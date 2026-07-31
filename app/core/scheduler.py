@@ -12,7 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from app.db.database import AsyncSessionLocal
-from app.models.models import Strategy, BotConfig, BotStatus, Trade, OrderStatus, PriceCandle, StrategyRun
+from app.models.models import Strategy, BotConfig, BotStatus, Trade, OrderStatus, OrderSide, PriceCandle, StrategyRun
 from app.services.binance_service import BinanceService
 from app.services.strategy_engine import run_strategy, Signal
 from app.services.order_executor import RiskManager, OrderExecutor
@@ -121,6 +121,60 @@ async def run_strategy_cycle(strategy_id: str, force: bool = False):
             db.add(_build_strategy_run(strategy, result_sig, float(last["close"])))
             logger.info(f"[{strategy.symbol}] {strategy.type}: {result_sig.signal} — {result_sig.reason}")
 
+            open_trade_result = await db.execute(
+                select(Trade).where(
+                    Trade.strategy_id == strategy.id,
+                    Trade.status      == OrderStatus.OPEN,
+                )
+            )
+            open_trade = open_trade_result.scalar_one_or_none()
+            executor = OrderExecutor(
+                binance,
+                db,
+                paper_trading=strategy.bot_config.paper_trading,
+            )
+
+            if open_trade:
+                close_price = None
+                close_reason = None
+
+                if open_trade.side == OrderSide.BUY and open_trade.stop_loss is not None:
+                    if float(last["low"]) <= float(open_trade.stop_loss):
+                        close_price = float(open_trade.stop_loss)
+                        close_reason = "Stop-loss hit"
+                elif open_trade.side == OrderSide.SELL and open_trade.stop_loss is not None:
+                    if float(last["high"]) >= float(open_trade.stop_loss):
+                        close_price = float(open_trade.stop_loss)
+                        close_reason = "Stop-loss hit"
+
+                if close_price is None and result_sig.signal == Signal.SELL:
+                    close_price = float(last["close"])
+                    close_reason = result_sig.reason
+
+                if close_price is not None:
+                    trade = await executor.close_trade(open_trade, close_price)
+                    logger.info(f"[{strategy.symbol}] Trade closed: {trade.id} @ {trade.exit_price}")
+                    return {
+                        "status": "COMPLETED",
+                        "signal": Signal.SELL,
+                        "reason": close_reason,
+                        "indicators": {
+                            **result_sig.indicators,
+                            "exit_price": close_price,
+                            "exit_reason": close_reason,
+                        },
+                        "trade_id": str(trade.id),
+                    }
+
+                await db.commit()
+                return {
+                    "status": "COMPLETED",
+                    "signal": result_sig.signal,
+                    "reason": "Trade already open",
+                    "indicators": result_sig.indicators,
+                    "trade_id": str(open_trade.id),
+                }
+
             if result_sig.signal == Signal.HOLD:
                 await db.commit()
                 return {
@@ -131,25 +185,16 @@ async def run_strategy_cycle(strategy_id: str, force: bool = False):
                     "trade_id": None,
                 }
 
-            # 4. Check for open trade — avoid double entry
-            open_trade = await db.execute(
-                select(Trade).where(
-                    Trade.strategy_id == strategy.id,
-                    Trade.status      == OrderStatus.OPEN,
-                )
-            )
-            if open_trade.scalar_one_or_none():
-                logger.info(f"[{strategy.symbol}] Trade already open, skipping.")
+            if result_sig.signal == Signal.SELL:
                 await db.commit()
                 return {
-                    "status": "SKIPPED",
+                    "status": "COMPLETED",
                     "signal": result_sig.signal,
-                    "reason": "Trade already open",
+                    "reason": "Sell signal ignored because no long position is open",
                     "indicators": result_sig.indicators,
                     "trade_id": None,
                 }
 
-            # 5. Risk check
             if strategy.bot_config.paper_trading:
                 usdt_avail = 1000
             else:
@@ -171,12 +216,6 @@ async def run_strategy_cycle(strategy_id: str, force: bool = False):
                     "trade_id": None,
                 }
 
-            # 6. Execute order
-            executor = OrderExecutor(
-                binance,
-                db,
-                paper_trading=strategy.bot_config.paper_trading,
-            )
             trade = await executor.execute(strategy, order)
             logger.info(f"[{strategy.symbol}] Trade executed: {trade.id} @ {trade.entry_price}")
             return {
@@ -186,7 +225,6 @@ async def run_strategy_cycle(strategy_id: str, force: bool = False):
                 "indicators": result_sig.indicators,
                 "trade_id": str(trade.id),
             }
-
         except Exception as e:
             reason = _format_strategy_error(e, strategy)
             logger.error(f"Strategy cycle error [{strategy_id}]: {reason}", exc_info=True)

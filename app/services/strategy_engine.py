@@ -29,15 +29,28 @@ class StrategyResult:
 def sma_crossover(df: pd.DataFrame, params: dict) -> StrategyResult:
     """
     Classic dual moving-average crossover.
-    params: { "fast": 10, "slow": 30 }
+    params: {
+      "fast": 20,
+      "slow": 50,
+      "trend_filter_enabled": true,
+      "trend_sma_period": 100,
+      "trend_require_rising": false
+    }
     """
-    fast = params.get("fast", 10)
-    slow = params.get("slow", 30)
+    fast = params.get("fast", 20)
+    slow = params.get("slow", 50)
+    trend_filter_enabled = params.get("trend_filter_enabled", True)
+    trend_sma_period = params.get("trend_sma_period", 100)
+    trend_require_rising = params.get("trend_require_rising", False)
 
     df = df.copy()
     df["sma_fast"] = ta.sma(df["close"], length=fast)
     df["sma_slow"] = ta.sma(df["close"], length=slow)
-    df = df.dropna(subset=["sma_fast", "sma_slow"])
+    required_columns = ["sma_fast", "sma_slow"]
+    if trend_filter_enabled:
+        df["sma_trend"] = ta.sma(df["close"], length=trend_sma_period)
+        required_columns.append("sma_trend")
+    df = df.dropna(subset=required_columns)
 
     if len(df) < 2:
         return StrategyResult(
@@ -73,12 +86,45 @@ def sma_crossover(df: pd.DataFrame, params: dict) -> StrategyResult:
         "sma_spread": float(round(sma_spread, 4)),
         "sma_spread_pct": float(round(sma_spread_pct, 4)),
     }
+    if trend_filter_enabled:
+        trend_allows_entry = _trend_allows_entry(
+            prev,
+            curr,
+            require_rising=trend_require_rising,
+        )
+        indicators.update({
+            "trend_filter_enabled": True,
+            "sma_trend": float(round(curr["sma_trend"], 4)),
+            "trend_sma_period": trend_sma_period,
+            "trend_require_rising": trend_require_rising,
+            "price_above_trend": bool(float(curr["close"]) > float(curr["sma_trend"])),
+            "trend_allows_entry": trend_allows_entry,
+        })
+    else:
+        trend_allows_entry = True
+        indicators["trend_filter_enabled"] = False
 
     if golden_cross:
+        if not trend_allows_entry:
+            return StrategyResult(
+                Signal.HOLD,
+                0.0,
+                f"Golden cross SMA{fast}/SMA{slow} skipped by trend filter",
+                indicators,
+            )
         return StrategyResult(Signal.BUY,  0.75, f"Golden cross SMA{fast}/SMA{slow} - {trend_bias} bias", indicators)
     if death_cross:
         return StrategyResult(Signal.SELL, 0.75, f"Death cross SMA{fast}/SMA{slow} - {trend_bias} bias",  indicators)
     return StrategyResult(Signal.HOLD, 0.0, f"No crossover - {trend_bias} bias", indicators)
+
+
+def _trend_allows_entry(prev: pd.Series, curr: pd.Series, *, require_rising: bool) -> bool:
+    price_above_trend = float(curr["close"]) > float(curr["sma_trend"])
+    if not price_above_trend:
+        return False
+    if require_rising:
+        return float(curr["sma_trend"]) > float(prev["sma_trend"])
+    return True
 
 
 # ── RSI Strategy ──────────────────────────────────────────────────────────────

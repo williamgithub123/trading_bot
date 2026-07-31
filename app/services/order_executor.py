@@ -100,7 +100,7 @@ class OrderExecutor:
             exchange_order_id = exchange_order_id,
             symbol            = order.symbol,
             side              = order.side,
-            status            = OrderStatus.FILLED,
+            status            = OrderStatus.OPEN,
             entry_price       = order.entry_price,
             quantity          = order.quantity,
             stop_loss         = order.stop_loss,
@@ -114,9 +114,9 @@ class OrderExecutor:
 
     async def close_trade(self, trade: Trade, exit_price: float) -> Trade:
         """Closes an open trade and calculates P&L."""
-        # Place the opposing market order
-        close_side = "sell" if trade.side == OrderSide.BUY else "buy"
-        await self.binance.create_market_order(trade.symbol, close_side, trade.quantity)
+        if not self.paper_trading:
+            close_side = "sell" if trade.side == OrderSide.BUY else "buy"
+            await self.binance.create_market_order(trade.symbol, close_side, trade.quantity)
 
         pnl = (exit_price - trade.entry_price) * trade.quantity
         if trade.side == OrderSide.SELL:

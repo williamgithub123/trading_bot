@@ -76,6 +76,29 @@ def _format_strategy_error(exc: Exception, strategy: Strategy) -> str:
     return reason
 
 
+def _check_stop_take_exit(open_trade: Trade, last_candle) -> tuple[float | None, str | None]:
+    """Checks whether the candle's high/low triggered the trade's stop-loss or take-profit.
+
+    Stop-loss is checked before take-profit: if a single candle's range spans both
+    levels, we don't know the intra-candle order, so we assume the worse outcome.
+    """
+    low  = float(last_candle["low"])
+    high = float(last_candle["high"])
+
+    if open_trade.side == OrderSide.BUY:
+        if open_trade.stop_loss is not None and low <= float(open_trade.stop_loss):
+            return float(open_trade.stop_loss), "Stop-loss hit"
+        if open_trade.take_profit is not None and high >= float(open_trade.take_profit):
+            return float(open_trade.take_profit), "Take-profit hit"
+    else:  # SELL (short)
+        if open_trade.stop_loss is not None and high >= float(open_trade.stop_loss):
+            return float(open_trade.stop_loss), "Stop-loss hit"
+        if open_trade.take_profit is not None and low <= float(open_trade.take_profit):
+            return float(open_trade.take_profit), "Take-profit hit"
+
+    return None, None
+
+
 async def run_strategy_cycle(strategy_id: str, force: bool = False):
     """Core trading loop — called by APScheduler for each active strategy."""
     async with AsyncSessionLocal() as db:
@@ -135,17 +158,7 @@ async def run_strategy_cycle(strategy_id: str, force: bool = False):
             )
 
             if open_trade:
-                close_price = None
-                close_reason = None
-
-                if open_trade.side == OrderSide.BUY and open_trade.stop_loss is not None:
-                    if float(last["low"]) <= float(open_trade.stop_loss):
-                        close_price = float(open_trade.stop_loss)
-                        close_reason = "Stop-loss hit"
-                elif open_trade.side == OrderSide.SELL and open_trade.stop_loss is not None:
-                    if float(last["high"]) >= float(open_trade.stop_loss):
-                        close_price = float(open_trade.stop_loss)
-                        close_reason = "Stop-loss hit"
+                close_price, close_reason = _check_stop_take_exit(open_trade, last)
 
                 if close_price is None and result_sig.signal == Signal.SELL:
                     close_price = float(last["close"])

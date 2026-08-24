@@ -108,18 +108,20 @@ def classify_market_stage(
     range_like = abs(sma50_slope_pct) < 1.0 and range_pct < 18.0
     after_advance = medium_return_pct > 8.0 and close >= sma100
 
-    if bullish_stack and price_above_sma100 and (rising_mas or higher_structure):
-        stage = 2
-        confidence = _confidence(72, bullish_stack, price_above_sma100, rising_mas, higher_structure)
-    elif bearish_stack and price_below_sma100 and (falling_mas or lower_structure):
-        stage = 4
-        confidence = _confidence(72, bearish_stack, price_below_sma100, falling_mas, lower_structure)
-    elif after_advance and range_like:
-        stage = 3
-        confidence = _confidence(62, after_advance, range_like, not rising_mas, close >= sma50)
-    else:
-        stage = 1
-        confidence = _confidence(55, range_like, not bullish_stack, not bearish_stack, abs(distance_to_sma100_pct) < 8.0)
+    stage, confidence = _decide_stage(
+        bullish_stack=bullish_stack,
+        bearish_stack=bearish_stack,
+        price_above_sma100=price_above_sma100,
+        price_below_sma100=price_below_sma100,
+        rising_mas=rising_mas,
+        falling_mas=falling_mas,
+        higher_structure=higher_structure,
+        lower_structure=lower_structure,
+        after_advance=after_advance,
+        range_like=range_like,
+        price_above_sma50=close >= sma50,
+        distance_to_sma100_within_8pct=abs(distance_to_sma100_pct) < 8.0,
+    )
 
     indicators = {
         "candles_count": len(candles),
@@ -156,6 +158,48 @@ def classify_market_stage(
         evidence=evidence,
         updated_at=_latest_timestamp(df),
     )
+
+
+def _decide_stage(
+    *,
+    bullish_stack: bool,
+    bearish_stack: bool,
+    price_above_sma100: bool,
+    price_below_sma100: bool,
+    rising_mas: bool,
+    falling_mas: bool,
+    higher_structure: bool,
+    lower_structure: bool,
+    after_advance: bool,
+    range_like: bool,
+    price_above_sma50: bool,
+    distance_to_sma100_within_8pct: bool,
+) -> tuple[int, int]:
+    """Maps the boolean trend signals to a stage (1-4) and a heuristic confidence score.
+
+    Full alignment (SMA20 > SMA50 > SMA100) is strong evidence on its own, so either
+    rising MAs or a higher structure is enough to confirm it. Without full alignment
+    (e.g. a pullback where the MAs briefly cross), we require all three signals
+    together before granting stage 2/4 — more corroboration for weaker evidence.
+    """
+    strong_bullish = bullish_stack and price_above_sma100 and (rising_mas or higher_structure)
+    soft_bullish   = price_above_sma100 and rising_mas and higher_structure
+    strong_bearish = bearish_stack and price_below_sma100 and (falling_mas or lower_structure)
+    soft_bearish   = price_below_sma100 and falling_mas and lower_structure
+
+    if strong_bullish or soft_bullish:
+        return 2, _confidence(
+            72 if strong_bullish else 60,
+            bullish_stack, price_above_sma100, rising_mas, higher_structure,
+        )
+    if strong_bearish or soft_bearish:
+        return 4, _confidence(
+            72 if strong_bearish else 60,
+            bearish_stack, price_below_sma100, falling_mas, lower_structure,
+        )
+    if after_advance and range_like:
+        return 3, _confidence(62, after_advance, range_like, not rising_mas, price_above_sma50)
+    return 1, _confidence(55, range_like, not bullish_stack, not bearish_stack, distance_to_sma100_within_8pct)
 
 
 def _validate_candles(candles: pd.DataFrame) -> None:

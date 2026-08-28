@@ -32,11 +32,33 @@ Temas identificados pero no urgentes — para retomar en otra iteración.
 - [x] Fix de clasificación de Market Stage — reconocer tendencia sin el stack
   completo de medias (commit `9ae7f05`, tests en `tests/test_market_stage.py`)
 - [x] Tests unitarios de `strategy_engine.py` (`tests/test_strategy_engine.py`)
-  y `RiskManager` (`tests/test_risk_manager.py`) — pendiente de commit
-- [ ] Tests de integración del ciclo `run_strategy_cycle` completo con Binance
-  mockeado (abre trade, cierra por stop/take-profit, etc.)
-- [ ] Introducir Alembic de verdad y quitar el `ALTER TABLE ... ADD COLUMN IF
-  NOT EXISTS` manual de `database.py` (ver explicación de Alembic dada en el chat)
+  y `RiskManager` (`tests/test_risk_manager.py`)
+- [x] Tests de integración del ciclo `run_strategy_cycle` completo con Binance
+  mockeado (`tests/test_scheduler_integration.py`, marcados `integration`)
+- [x] Introducir Alembic de verdad y quitar el `ALTER TABLE ... ADD COLUMN IF
+  NOT EXISTS` manual de `database.py`. Ver `alembic/` — dos migraciones:
+  `c14d22a7cf9b` (baseline: todo el esquema actual, incluye el hypertable +
+  retention policy de TimescaleDB con fallback best-effort si la extensión no
+  está disponible) y `417dd0527945` (deja `bot_configs.paper_trading` nullable,
+  igual que el modelo — el hack manual la había dejado `NOT NULL`). La base de
+  dev local quedó al día vía `stamp` + `upgrade` (verificado además desde cero
+  contra un schema vacío). `Dockerfile` ahora corre `alembic upgrade head`
+  antes de levantar uvicorn.
+
+Con esto la Fase 1 queda completa.
+
+**Flujo de aquí en adelante para cambios de esquema:** editar el modelo en
+`app/models/models.py` → `alembic revision --autogenerate -m "..."` → revisar
+a mano el archivo generado en `alembic/versions/` (autogenerate no detecta
+todo: constraints, cambios de tipo, etc.) → `alembic upgrade head` local →
+commitear el archivo de migración.
+
+**Nota:** `tests/conftest.py` (fixtures de los tests de integración) sigue
+usando `Base.metadata.create_all()` directo para armar el schema de pruebas,
+no las migraciones de Alembic — es más rápido y no hace falta la
+resiliencia contra bases ya existentes que sí necesita Alembic. Si algún día
+las migraciones divergen de lo que hacen los modelos (no debería, pero...) los
+tests de integración no lo detectarían; no es urgente pero queda anotado.
 
 ## Roadmap — Fase 2 (confiabilidad de ejecución)
 

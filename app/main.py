@@ -6,14 +6,13 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import auth, backtest, bot, trades, strategies, market
-from app.db.database import init_db
 from app.core.scheduler import start_scheduler, stop_scheduler
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Initialize core services before the API starts handling requests.
-    await init_db()
+    # Schema is applied separately via `alembic upgrade head` (see
+    # alembic/README or BACKLOG.md) before the app starts, not at import time.
     await start_scheduler()
     yield
     await stop_scheduler()

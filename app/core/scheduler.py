@@ -16,6 +16,7 @@ from app.models.models import Strategy, BotConfig, BotStatus, Trade, OrderStatus
 from app.services.binance_service import BinanceService
 from app.services.strategy_engine import run_strategy, Signal
 from app.services.order_executor import RiskManager, OrderExecutor
+from app.services.reconciler import reconcile_strategy
 
 logger    = logging.getLogger("bot_scheduler")
 scheduler = AsyncIOScheduler()
@@ -272,9 +273,16 @@ async def start_scheduler():
     # Resume any strategies that were running before restart
     async with AsyncSessionLocal() as db:
         result = await db.execute(
-            select(Strategy).where(Strategy.is_active == True)
+            select(Strategy)
+            .options(selectinload(Strategy.bot_config))
+            .where(Strategy.is_active == True)
         )
         for strategy in result.scalars().all():
+            if strategy.bot_config and not strategy.bot_config.paper_trading:
+                try:
+                    await reconcile_strategy(strategy, strategy.bot_config, db)
+                except Exception:
+                    logger.error(f"Reconciliation failed for strategy {strategy.id}", exc_info=True)
             await schedule_strategy(str(strategy.id), strategy.timeframe)
 
 

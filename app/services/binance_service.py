@@ -152,6 +152,14 @@ class BinanceService:
     async def fetch_open_orders(self, symbol: Optional[str] = None) -> List[dict]:
         return await asyncio.to_thread(self.exchange.fetch_open_orders, symbol)
 
+    async def fetch_my_trades(
+        self, symbol: str, since: Optional[datetime] = None, limit: int = 50
+    ) -> List[dict]:
+        """Real fills for `symbol` — used to find what a position actually closed
+        at when it was closed outside the bot (see app/services/reconciler.py)."""
+        since_ms = _datetime_to_milliseconds(since) if since else None
+        return await asyncio.to_thread(self.exchange.fetch_my_trades, symbol, since_ms, limit)
+
 
 def _datetime_to_milliseconds(value: datetime) -> int:
     timestamp = pd.Timestamp(value)

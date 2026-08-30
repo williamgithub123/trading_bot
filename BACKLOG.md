@@ -62,8 +62,21 @@ tests de integración no lo detectarían; no es urgente pero queda anotado.
 
 ## Roadmap — Fase 2 (confiabilidad de ejecución)
 
-- [ ] Reconciliación al iniciar el bot: sincronizar posiciones abiertas contra
-  el balance/órdenes reales de Binance, no solo contra la tabla `trades`.
+- [x] Reconciliación al iniciar el bot: sincronizar posiciones abiertas contra
+  el balance real de Binance, no solo contra la tabla `trades`. Ver
+  `app/services/reconciler.py::reconcile_strategy`, llamado desde
+  `start_scheduler()` (arranque del proceso) y `POST /api/bot/start`
+  (arranque manual sin reiniciar el proceso). Solo aplica con
+  `paper_trading=False`. Compara el balance real del activo base contra el
+  trade `OPEN` de la estrategia: si coincide (tolerancia 1%, por fees) no
+  hace nada; si el balance real es ~0 cierra el trade localmente usando el
+  precio real de los fills de Binance (`fetch_my_trades`, con fallback al
+  ticker si no encuentra fills) — evita que un trade `OPEN` fantasma bloquee
+  al bot de abrir posiciones nuevas para siempre; si hay una diferencia
+  parcial o un balance sin trade que lo explique, no toca nada y solo lo
+  registra como `StrategyRun` con `signal="RECONCILE_MISMATCH"` para revisión
+  manual — no se adivina plata a ciegas. Tests en `tests/test_reconciler.py`
+  (marcados `integration`).
 - [ ] Mover el stop-loss (y opcionalmente el take-profit) a órdenes reales en
   el exchange en vez de simulación por polling.
 - [ ] Manejo de rate limits / reintentos con backoff en `binance_service.py`.

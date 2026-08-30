@@ -1,6 +1,8 @@
 """
 API Routes — Bot Control (start / pause / stop / status)
 """
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,7 +14,9 @@ from app.db.database import get_db
 from app.models.models import BotConfig, BotStatus, Strategy, User
 from app.core.security import get_current_user, encrypt_key
 from app.core.scheduler import run_strategy_cycle, schedule_strategy, unschedule_strategy
+from app.services.reconciler import reconcile_strategy
 
+logger = logging.getLogger("bot_scheduler")
 router = APIRouter()
 
 
@@ -130,6 +134,12 @@ async def start_bot(
     config.started_at = datetime.utcnow()
     strategy.is_active = True
     await db.commit()
+
+    if not config.paper_trading:
+        try:
+            await reconcile_strategy(strategy, config, db)
+        except Exception:
+            logger.error(f"Reconciliation failed for strategy {strategy.id}", exc_info=True)
 
     await schedule_strategy(str(strategy.id), strategy.timeframe)
     return {"status": "RUNNING"}

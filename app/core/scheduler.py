@@ -77,22 +77,28 @@ def _format_strategy_error(exc: Exception, strategy: Strategy) -> str:
     return reason
 
 
-def _check_stop_take_exit(open_trade: Trade, last_candle) -> tuple[float | None, str | None]:
+def _check_stop_take_exit(
+    open_trade: Trade, last_candle, *, skip_stop_loss: bool = False
+) -> tuple[float | None, str | None]:
     """Checks whether the candle's high/low triggered the trade's stop-loss or take-profit.
 
     Stop-loss is checked before take-profit: if a single candle's range spans both
     levels, we don't know the intra-candle order, so we assume the worse outcome.
+
+    skip_stop_loss=True when the trade has a real stop-loss order resting on
+    Binance (see run_strategy_cycle) -- that order is the authority on whether
+    the stop-loss fired, so this only needs to watch for take-profit.
     """
     low  = float(last_candle["low"])
     high = float(last_candle["high"])
 
     if open_trade.side == OrderSide.BUY:
-        if open_trade.stop_loss is not None and low <= float(open_trade.stop_loss):
+        if not skip_stop_loss and open_trade.stop_loss is not None and low <= float(open_trade.stop_loss):
             return float(open_trade.stop_loss), "Stop-loss hit"
         if open_trade.take_profit is not None and high >= float(open_trade.take_profit):
             return float(open_trade.take_profit), "Take-profit hit"
     else:  # SELL (short)
-        if open_trade.stop_loss is not None and high >= float(open_trade.stop_loss):
+        if not skip_stop_loss and open_trade.stop_loss is not None and high >= float(open_trade.stop_loss):
             return float(open_trade.stop_loss), "Stop-loss hit"
         if open_trade.take_profit is not None and low <= float(open_trade.take_profit):
             return float(open_trade.take_profit), "Take-profit hit"
@@ -159,7 +165,27 @@ async def run_strategy_cycle(strategy_id: str, force: bool = False):
             )
 
             if open_trade:
-                close_price, close_reason = _check_stop_take_exit(open_trade, last)
+                if open_trade.stop_loss_order_id:
+                    stop_order = await binance.fetch_order(open_trade.stop_loss_order_id, open_trade.symbol)
+                    if str(stop_order.get("status", "")).lower() in ("closed", "filled"):
+                        trade = await executor.close_trade_from_stop_loss_fill(open_trade)
+                        reason = "Stop-loss hit (orden real en Binance)"
+                        logger.info(f"[{strategy.symbol}] {reason}: {trade.id} @ {trade.exit_price}")
+                        return {
+                            "status": "COMPLETED",
+                            "signal": Signal.SELL,
+                            "reason": reason,
+                            "indicators": {
+                                **result_sig.indicators,
+                                "exit_price": trade.exit_price,
+                                "exit_reason": reason,
+                            },
+                            "trade_id": str(trade.id),
+                        }
+
+                close_price, close_reason = _check_stop_take_exit(
+                    open_trade, last, skip_stop_loss=bool(open_trade.stop_loss_order_id)
+                )
 
                 if close_price is None and result_sig.signal == Signal.SELL:
                     close_price = float(last["close"])
@@ -173,8 +199,10 @@ async def run_strategy_cycle(strategy_id: str, force: bool = False):
                         "signal": Signal.SELL,
                         "reason": close_reason,
                         "indicators": {
+                            # trade.exit_price, not close_price: close_trade can
+                            # override it (a stop-loss order winning a cancel race).
                             **result_sig.indicators,
-                            "exit_price": close_price,
+                            "exit_price": trade.exit_price,
                             "exit_reason": close_reason,
                         },
                         "trade_id": str(trade.id),

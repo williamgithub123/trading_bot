@@ -77,8 +77,31 @@ tests de integración no lo detectarían; no es urgente pero queda anotado.
   registra como `StrategyRun` con `signal="RECONCILE_MISMATCH"` para revisión
   manual — no se adivina plata a ciegas. Tests en `tests/test_reconciler.py`
   (marcados `integration`).
-- [ ] Mover el stop-loss (y opcionalmente el take-profit) a órdenes reales en
-  el exchange en vez de simulación por polling.
+- [x] Mover el stop-loss a una orden real en el exchange (`STOP_LOSS_LIMIT`),
+  en vez de solo simulación por polling. El take-profit y la salida por señal
+  de la estrategia siguen por polling — solo el stop-loss se movió, porque es
+  la mitad asimétricamente peligrosa (un take-profit tardío gana un poco
+  menos; un stop-loss tardío puede reventar la cuenta) y porque spot de
+  Binance no permite dos órdenes de venta abiertas por la misma cantidad a la
+  vez (para eso existiría OCO, que queda fuera de este alcance — ver nota
+  abajo). Ver `app/services/order_executor.py` (`execute`/`close_trade`/
+  `close_trade_from_stop_loss_fill`/`_cancel_stop_loss_order`) y
+  `app/core/scheduler.py` (`run_strategy_cycle` pregunta el estado de la
+  orden real antes de caer al chequeo por vela). Solo aplica con
+  `paper_trading=False`; si Binance rechaza la orden de stop-loss al abrir el
+  trade, se cae al polling de siempre para ese trade en vez de bloquear la
+  apertura. Columna nueva `trades.stop_loss_order_id` (migración
+  `582084654a38`). Tests en `tests/test_scheduler_integration.py::
+  TestRealStopLossOrder` (colocación, fallback por rechazo, cierre cuando la
+  orden real se ejecuta sola, cancelación al cerrar por take-profit, y la
+  carrera entre cancelar y que ya se haya ejecutado).
+  **Pendiente de verificar a mano contra Binance testnet** — las reglas de
+  precisión de precio/cantidad y filtros mínimos por símbolo las valida
+  Binance del lado suyo; un test con doble falso no las puede detectar.
+  **OCO de verdad** (take-profit también como orden real, cancelándose mutuo)
+  queda pendiente para una iteración futura si hace falta — usaría el
+  endpoint crudo de OCO de Binance, ya que la versión de `ccxt` instalada
+  (4.3.19) no lo expone en su capa unificada para spot.
 - [ ] Manejo de rate limits / reintentos con backoff en `binance_service.py`.
 - [ ] Prorrateo de capital entre estrategias activas de un mismo usuario (o un
   límite global de exposición).

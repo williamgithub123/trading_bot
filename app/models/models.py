@@ -109,10 +109,13 @@ class Trade(Base):
     id          = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     strategy_id = Column(UUID(as_uuid=True), ForeignKey("strategies.id"), nullable=False)
 
-    exchange_order_id = Column(String(100), nullable=True)
-    symbol            = Column(String(20), nullable=False)
-    side              = Column(Enum(OrderSide), nullable=False)
-    status            = Column(Enum(OrderStatus), default=OrderStatus.OPEN)
+    exchange_order_id   = Column(String(100), nullable=True)
+    # Real STOP_LOSS_LIMIT order placed on Binance for this trade (paper_trading=False
+    # only) -- see app/services/order_executor.py / app/services/reconciler.py.
+    stop_loss_order_id  = Column(String(100), nullable=True)
+    symbol              = Column(String(20), nullable=False)
+    side                = Column(Enum(OrderSide), nullable=False)
+    status              = Column(Enum(OrderStatus), default=OrderStatus.OPEN)
 
     entry_price  = Column(Float, nullable=False)
     exit_price   = Column(Float, nullable=True)

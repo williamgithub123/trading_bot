@@ -131,6 +131,33 @@ class BinanceService:
             amount,
         )
 
+    async def create_stop_loss_order(
+        self,
+        symbol: str,
+        side: str,
+        amount: float,
+        stop_price: float,
+        limit_price: Optional[float] = None,
+        limit_buffer_pct: float = 0.5,
+    ) -> dict:
+        """Places a STOP_LOSS_LIMIT order: once the market trades at stop_price it
+        turns into a limit order at limit_price, same as a regular resting order
+        from then on. limit_price defaults to a bit past stop_price in the order's
+        own direction (0.5%) so it still has a decent chance to fill during a fast
+        move instead of sitting unfilled behind a price that's already run past it."""
+        if limit_price is None:
+            buffer = (1 - limit_buffer_pct / 100) if side == "sell" else (1 + limit_buffer_pct / 100)
+            limit_price = stop_price * buffer
+        return await asyncio.to_thread(
+            self.exchange.create_order,
+            symbol,
+            "STOP_LOSS_LIMIT",
+            side,
+            amount,
+            limit_price,
+            {"stopPrice": stop_price, "timeInForce": "GTC"},
+        )
+
     async def create_limit_order(
         self, symbol: str, side: str, amount: float, price: float
     ) -> dict:
